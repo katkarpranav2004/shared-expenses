@@ -1,0 +1,23 @@
+date,description,amount,paid_by,split_type,participants,splits
+2024-02-20,Beach club,90.00,Alice,EQUAL,Alice;Bob;Carol,
+2024-02-21,Scooter rental,"$1,200.50",Bob,EQUAL,Alice;Bob,
+2024-02-21,Snacks,30.00,Bob,EXACT,Alice;Bob,Alice=10.00;Bob=20.00
+2024-02-22,Boat tour,200.00,Carol,PERCENTAGE,Alice;Carol,Alice=25;Carol=75
+2024-02-20,Beach club,90.00,Alice,EQUAL,Alice;Bob;Carol,
+2024-02-23,Lunch,33.333,Alice,EQUAL,Alice;Bob,
+2024-02-23,Refund,-25.00,Bob,EQUAL,Alice;Bob,
+2024-02-23,Free water,0.00,Carol,EQUAL,Alice;Carol,
+2024-02-30,Impossible day,50.00,Alice,EQUAL,Alice;Bob,
+2027-01-05,Advance booking,150.00,Carol,EQUAL,Alice;Carol,
+2024-02-24,Dinner,45.00,Alise,EQUAL,Alise;Bob,
+2024-03-15,Gas after leaving,60.00,Dave,EQUAL,Dave;Bob,
+2024-02-25,Taxi,100.00,Bob,EXACT,Alice;Bob,Alice=40.00;Bob=55.00
+2024-02-25,Hotel,100.00,Carol,PERCENTAGE,Alice;Carol,Alice=50;Carol=40
+2024-02-26,Mystery split,50.00,Alice,shares,Alice;Bob,
+2024-02-26,Souvenir,20.00,Alice,EQUAL,Alice,
+2024-02-27,Imported coffee,€50,Bob,EQUAL,Alice;Bob,
+2024-02-27,  Spaced out  ,25.00,  alice  ,EQUAL, ALICE ;bob,
+2024-02-28,Same day same price,40.00,Alice,EQUAL,Alice;Bob,
+2024-02-28,Same day same price again,40.00,Alice,EQUAL,Alice;Bob,
+,,,,,,
+2024-02-29,Leap day works,29.00,Bob,EQUAL,Alice;Bob,
