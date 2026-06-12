@@ -4,6 +4,9 @@ import bcrypt from "bcryptjs";
 import { prisma } from "./db";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  // Required when deploying behind a non-Vercel proxy (Railway): tells Auth.js
+  // to trust X-Forwarded-Host from the platform's load balancer.
+  trustHost: true,
   session: { strategy: "jwt" },
   pages: { signIn: "/login" },
   providers: [
