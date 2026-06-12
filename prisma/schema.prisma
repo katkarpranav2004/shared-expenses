@@ -3,11 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider          = "postgresql"
-  url               = env("DATABASE_URL")
-  // Used by `prisma migrate dev` locally (Prisma's local Postgres can't
-  // CREATE DATABASE for an implicit shadow DB). Unset in production.
-  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 enum Role {
