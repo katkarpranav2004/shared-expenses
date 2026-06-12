@@ -1,0 +1,162 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  // Used by `prisma migrate dev` locally (Prisma's local Postgres can't
+  // CREATE DATABASE for an implicit shadow DB). Unset in production.
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+enum SplitType {
+  EQUAL
+  EXACT
+  PERCENTAGE
+}
+
+enum ImportOutcome {
+  IMPORTED
+  FLAGGED
+  REJECTED
+  DUPLICATE
+}
+
+model User {
+  id              String         @id @default(cuid())
+  email           String         @unique
+  name            String
+  passwordHash    String         @map("password_hash")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  memberships     GroupMember[]
+  expensesPaid    Expense[]      @relation("payer")
+  splits          ExpenseSplit[]
+  settlementsFrom Settlement[]   @relation("settlement_from")
+  settlementsTo   Settlement[]   @relation("settlement_to")
+  groupsCreated   Group[]
+  importsUploaded ImportBatch[]
+
+  @@map("users")
+}
+
+model Group {
+  id          String        @id @default(cuid())
+  name        String
+  description String?
+  createdById String        @map("created_by_id")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  createdBy   User          @relation(fields: [createdById], references: [id])
+  members     GroupMember[]
+  expenses    Expense[]
+  settlements Settlement[]
+  imports     ImportBatch[]
+
+  @@map("groups")
+}
+
+model GroupMember {
+  id       String    @id @default(cuid())
+  groupId  String    @map("group_id")
+  userId   String    @map("user_id")
+  role     Role      @default(MEMBER)
+  joinedAt DateTime  @default(now()) @map("joined_at")
+  leftAt   DateTime? @map("left_at")
+  group    Group     @relation(fields: [groupId], references: [id])
+  user     User      @relation(fields: [userId], references: [id])
+
+  @@unique([groupId, userId])
+  @@index([userId])
+  @@map("group_members")
+}
+
+model Expense {
+  id          String         @id @default(cuid())
+  groupId     String         @map("group_id")
+  paidById    String         @map("paid_by_id")
+  description String
+  amountCents Int            @map("amount_cents")
+  date        DateTime       @db.Date
+  splitType   SplitType      @map("split_type")
+  createdAt   DateTime       @default(now()) @map("created_at")
+  importRowId String?        @unique @map("import_row_id")
+  splits      ExpenseSplit[]
+  group       Group          @relation(fields: [groupId], references: [id])
+  paidBy      User           @relation("payer", fields: [paidById], references: [id])
+  importRow   ImportRow?     @relation(fields: [importRowId], references: [id])
+
+  @@index([groupId])
+  @@index([paidById])
+  @@map("expenses")
+}
+
+model ExpenseSplit {
+  id         String  @id @default(cuid())
+  expenseId  String  @map("expense_id")
+  userId     String  @map("user_id")
+  shareCents Int     @map("share_cents")
+  expense    Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  user       User    @relation(fields: [userId], references: [id])
+
+  @@unique([expenseId, userId])
+  @@index([userId])
+  @@map("expense_splits")
+}
+
+model Settlement {
+  id          String   @id @default(cuid())
+  groupId     String   @map("group_id")
+  fromUserId  String   @map("from_user_id")
+  toUserId    String   @map("to_user_id")
+  amountCents Int      @map("amount_cents")
+  date        DateTime @db.Date
+  note        String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  group       Group    @relation(fields: [groupId], references: [id])
+  from        User     @relation("settlement_from", fields: [fromUserId], references: [id])
+  to          User     @relation("settlement_to", fields: [toUserId], references: [id])
+
+  @@index([groupId])
+  @@map("settlements")
+}
+
+model ImportBatch {
+  id           String      @id @default(cuid())
+  groupId      String      @map("group_id")
+  uploadedById String      @map("uploaded_by_id")
+  filename     String
+  totalRows    Int         @map("total_rows")
+  importedRows Int         @map("imported_rows")
+  flaggedRows  Int         @map("flagged_rows")
+  rejectedRows Int         @map("rejected_rows")
+  duplicateRows Int        @map("duplicate_rows")
+  emptyRows    Int         @map("empty_rows")
+  createdAt    DateTime    @default(now()) @map("created_at")
+  rows         ImportRow[]
+  group        Group       @relation(fields: [groupId], references: [id])
+  uploadedBy   User        @relation(fields: [uploadedById], references: [id])
+
+  @@index([groupId])
+  @@map("import_batches")
+}
+
+model ImportRow {
+  id        String        @id @default(cuid())
+  batchId   String        @map("batch_id")
+  rowNumber Int           @map("row_number")
+  rawData   String        @map("raw_data")
+  rowHash   String        @map("row_hash")
+  outcome   ImportOutcome
+  reasons   String[]
+  batch     ImportBatch   @relation(fields: [batchId], references: [id])
+  expense   Expense?
+
+  @@index([rowHash])
+  @@index([batchId])
+  @@map("import_rows")
+}
