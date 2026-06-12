@@ -11,7 +11,7 @@
 | Layer | Choice | Why (one line — full reasoning in DECISIONS.md) |
 |---|---|---|
 | Framework | **Next.js 14+ (App Router, TypeScript)** | One repo, one deploy, API routes + SSR pages; fastest path to a professional result |
-| UI | **Tailwind CSS + shadcn/ui** | Polished look with near-zero custom CSS |
+| UI | **Tailwind CSS** (v4, no component library) | Polished look with near-zero custom CSS; a component library proved unnecessary at this screen count |
 | ORM | **Prisma** | Type-safe schema-as-code, migrations are reviewable artifacts |
 | Database | **PostgreSQL (Neon free tier)** | Relational (required), real constraints, free public hosting |
 | Auth | **NextAuth (Credentials provider) + bcrypt** | Session-based auth without rolling our own token crypto |

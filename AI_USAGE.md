@@ -30,11 +30,11 @@ questioned, and usually edited. Concretely:
 
 ## Incident Log — incorrect or risky AI output
 
-> Entries 1–4 occurred during the planning phase (verifiable in the chat transcript /
-> doc history). Entries 5–10 are the **highest-risk failure modes identified up front**;
-> each is converted into a guard (test, constraint, or review rule) *before* coding, and
-> this log is updated with actual occurrences during the build. Final submission will
-> contain only verified incidents.
+> Entries 1–4 occurred during the planning phase; entries 10–11 occurred during the
+> build (all verifiable in the chat transcript / git history). Entries 5–9 and 12–13
+> are the **highest-risk failure modes identified up front**; each was converted into
+> a guard (test, constraint, or review rule) *before* coding, and instances are logged
+> here as they occur.
 
 ### 1. Wrong sign in the balance formula (occurred: planning)
 - **What:** First draft of DESIGN.md stated `net = Σ paid − Σ share + Σ settlements received`, which double-counts in the wrong direction — receiving a settlement must *decrease* your net (your credit was consumed), paying one must *increase* it.
@@ -76,10 +76,20 @@ questioned, and usually edited. Concretely:
 - **Risk:** generated expense-create handlers persist client-sent split amounts directly — a tampered request could store splits that don't sum to the total.
 - **Guard:** server recomputes splits from raw inputs (DECISIONS.md #4); test posts a malicious payload (splits sum ≠ total) and expects `SPLIT_SUM_MISMATCH`.
 
-### 10. Hallucinated library APIs (expected, will log instances)
+### 10. Test fixture that could never pass (occurred: build)
+- **What:** AI wrote a test asserting the unknown-user anomaly includes a "closest match" hint, using payer `'Jhon'` — but no member named John existed in the fixture, so no hint within edit distance 2 was possible. The test failed against correct code.
+- **Detected:** the only red test in the first vitest run; reading the assertion against the fixture showed the test was wrong, not the validator.
+- **Correction:** fixture changed to `'Alise'` (distance 1 from member 'Alice'). Lesson: when a test fails, suspect the test as much as the code — especially when both came from the same AI.
+
+### 11. Type-system workaround that broke the thing it was fixing (occurred: build)
+- **What:** to fix a TypeScript narrowing failure on the auth guard's union type, AI added `error?: never` to the success branch — which made `"error" in guard` narrowing *worse* (an optional property keeps the branch in the narrowed union), still `string | undefined`.
+- **Detected:** `next build` failed again with the identical error after the "fix".
+- **Correction:** removed the optional property entirely; a clean presence-discriminated union narrows correctly. Lesson: a failed fix repeated is a wrong diagnosis — re-read the error, don't pile on.
+
+### 12. Hallucinated library APIs (expected, will log instances)
 - **Risk:** AI invents Prisma/NextAuth options that don't exist (e.g., plausible-but-fake `prisma.$transaction` flags or NextAuth callback names), which compile-fail at best and silently no-op at worst.
 - **Guard:** TypeScript strict mode + every generated config option checked against the installed version's docs; instances logged here as found.
 
-### 11. Off-by-one in largest-remainder distribution (expected, will log instances)
+### 13. Off-by-one in largest-remainder distribution (expected, will log instances)
 - **Risk:** the classic generated bug distributes `remainder` cents starting at index 1 or distributes `n − remainder` — sums still *look* right in the happy path.
 - **Guard:** property-style test: for 1,000 random (amount, n) pairs, assert Σ shares == amount and max(share) − min(share) ≤ 1.

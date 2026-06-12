@@ -21,8 +21,9 @@ downloadable import report.
 
 ## Stack
 
-Next.js (App Router, TypeScript) · Prisma · PostgreSQL (Neon) · Tailwind + shadcn/ui ·
-NextAuth · Vitest · deployed on Vercel. Rationale for every choice: [DECISIONS.md](DECISIONS.md).
+Next.js (App Router, TypeScript) · Prisma · PostgreSQL (Neon in production, Prisma
+local Postgres in dev) · Tailwind v4 · NextAuth (credentials) · Vitest · deployed on
+Vercel. Rationale for every choice: [DECISIONS.md](DECISIONS.md).
 
 ## Documentation
 
@@ -48,12 +49,25 @@ NextAuth · Vitest · deployed on Vercel. Rationale for every choice: [DECISIONS
 ```bash
 git clone <repo> && cd splitwise-clone
 npm install
-cp .env.example .env        # set DATABASE_URL, NEXTAUTH_SECRET
-npx prisma migrate dev      # create schema
-npx prisma db seed          # demo users + group + expenses
+cp .env.example .env        # then fill DATABASE_URL + AUTH_SECRET (see below)
+npm run db:dev              # local Postgres via Prisma — keep running; paste its
+                            # URL into .env (use 127.0.0.1, add &pgbouncer=true)
+npx prisma db push          # create schema locally
+npx prisma db execute --schema prisma/schema.prisma \
+  --file prisma/migrations/20260613000001_add_check_constraints/migration.sql
+npm run db:seed             # demo users + group + expenses
 npm run dev                 # http://localhost:3000
-npm test                    # balance engine + CSV validator suites
+npm test                    # balance engine + CSV validator suites (55 tests)
+node scripts/smoke.mjs      # end-to-end smoke test against the running dev server
 ```
+
+Demo logins after seeding: `alice@example.com` / `bob@example.com` / `carol@example.com`,
+password `password123`. A sample CSV full of anomalies for the import demo:
+[public/sample-import.csv](public/sample-import.csv).
+
+> Production uses `prisma migrate deploy` with the committed `prisma/migrations/`;
+> `db push` is local-dev-only because the local Prisma Postgres server can't host
+> `migrate dev`'s shadow database.
 
 ## Import report
 
