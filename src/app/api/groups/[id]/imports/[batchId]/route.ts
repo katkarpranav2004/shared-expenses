@@ -43,6 +43,7 @@ export async function GET(
         total: batch.totalRows,
         imported: batch.importedRows,
         flagged: batch.flaggedRows,
+        reclassified: batch.reclassifiedRows,
         rejected: batch.rejectedRows,
         duplicate: batch.duplicateRows,
         empty: batch.emptyRows,

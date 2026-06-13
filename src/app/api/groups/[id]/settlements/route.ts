@@ -46,6 +46,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       fromUserId: guard.userId,
       toUserId,
       amountCents: amount.cents,
+      originalAmountCents: amount.cents, // manual settlements are in base currency
+      currency: "INR",
+      fxRateBp: 100,
       date,
       note: note || null,
     },

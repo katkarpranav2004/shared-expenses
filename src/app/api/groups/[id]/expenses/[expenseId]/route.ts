@@ -44,6 +44,9 @@ export async function PUT(
       data: {
         description: built.expense.description,
         amountCents: built.expense.amountCents,
+        originalAmountCents: built.expense.originalAmountCents,
+        currency: built.expense.currency,
+        fxRateBp: built.expense.fxRateBp,
         date: built.expense.date,
         paidById: built.expense.paidById,
         splitType: built.expense.splitType,
