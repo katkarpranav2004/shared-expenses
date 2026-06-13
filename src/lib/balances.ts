@@ -7,6 +7,9 @@ export type ExpenseEntry = {
   paidById: string;
   amountCents: number;
   splits: { userId: string; shareCents: number }[];
+  // A refund reverses a normal expense: the payer is debited and participants
+  // are credited. Modelled by flipping the sign; Σ net stays 0.
+  isRefund?: boolean;
 };
 
 export type SettlementEntry = {
@@ -26,8 +29,9 @@ export function computeNets(
     nets.set(userId, (nets.get(userId) ?? 0) + delta);
 
   for (const e of expenses) {
-    add(e.paidById, e.amountCents);
-    for (const s of e.splits) add(s.userId, -s.shareCents);
+    const sign = e.isRefund ? -1 : 1;
+    add(e.paidById, sign * e.amountCents);
+    for (const s of e.splits) add(s.userId, -sign * s.shareCents);
   }
   for (const p of settlements) {
     // Paying a settlement clears your debt (raises net); receiving one
@@ -69,7 +73,12 @@ export function pairwiseDebts(
   };
 
   for (const e of expenses) {
-    for (const s of e.splits) owe(s.userId, e.paidById, s.shareCents);
+    // Normal: each participant owes the payer their share.
+    // Refund: reversed — the payer owes each participant their share back.
+    for (const s of e.splits) {
+      if (e.isRefund) owe(e.paidById, s.userId, s.shareCents);
+      else owe(s.userId, e.paidById, s.shareCents);
+    }
   }
   // A settlement payment from X to Y reduces X's debt to Y.
   for (const p of settlements) owe(p.toUserId, p.fromUserId, p.amountCents);
