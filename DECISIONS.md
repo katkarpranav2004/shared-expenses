@@ -196,3 +196,26 @@ Keeping it display-only means the ledger remains an immutable record of facts.
 **Reason:** One definition of "what a valid expense is" used by both entry paths (UI and
 import) — the alternative is two drifting validators, which is exactly how an import
 path lets in data the UI would have rejected.
+
+---
+
+## 14. Deployment: Railway instead of the planned Vercel + Neon
+
+**Problem:** The original plan (DECISIONS #1, #10) assumed Vercel for the app and Neon
+for Postgres. At deploy time, Railway was the platform with working CLI credentials,
+and it hosts app + database in one project.
+
+**Options:**
+| Option | Pros | Cons |
+|---|---|---|
+| **Railway (app + Postgres together)** | one platform, one token; private networking between app and DB; `preDeployCommand` runs `prisma migrate deploy` on every deploy | app runs as a long-lived container, not serverless (actually simpler for Prisma connection management) |
+| Vercel + Neon as planned | serverless + the stack the docs assumed | two accounts/two auth flows; Prisma on serverless needs connection pooling care |
+
+**Choice:** Railway.
+**Reason:** The deciding factor was operational, not architectural: working credentials
+and one platform instead of two. Nothing in the code is Vercel-specific — the only
+change required was `trustHost: true` in the NextAuth config (any non-Vercel proxy
+needs it) and a `railway.json`. Honest note for the interview: the container model
+quietly *removed* a risk the docs worried about (serverless cold-start mid-import is
+moot when the server is long-lived; the one-transaction commit guard still matters for
+crashes).

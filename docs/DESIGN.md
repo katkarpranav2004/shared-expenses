@@ -15,7 +15,7 @@
 | ORM | **Prisma** | Type-safe schema-as-code, migrations are reviewable artifacts |
 | Database | **PostgreSQL (Neon free tier)** | Relational (required), real constraints, free public hosting |
 | Auth | **NextAuth (Credentials provider) + bcrypt** | Session-based auth without rolling our own token crypto |
-| Deployment | **Vercel (app) + Neon (DB)** | Public URL in minutes, free tier, zero-ops |
+| Deployment | **Railway (app + Postgres, one project)** | Public URL in minutes; DB and app co-located with private networking. (Original plan was Vercel + Neon — see DECISIONS.md #14 for why it changed) |
 | Testing | **Vitest** | Fast unit tests for the balance engine and CSV validator |
 
 ---

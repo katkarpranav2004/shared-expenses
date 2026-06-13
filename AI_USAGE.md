@@ -30,11 +30,11 @@ questioned, and usually edited. Concretely:
 
 ## Incident Log — incorrect or risky AI output
 
-> Entries 1–4 occurred during the planning phase; entries 10–11 occurred during the
-> build (all verifiable in the chat transcript / git history). Entries 5–9 and 12–13
-> are the **highest-risk failure modes identified up front**; each was converted into
-> a guard (test, constraint, or review rule) *before* coding, and instances are logged
-> here as they occur.
+> Entries 1–4 occurred during planning; 10–11 during the build; 13–14 during
+> deployment (all verifiable in the chat transcript / git history). Entries 5–9, 12
+> and 15 are the **highest-risk failure modes identified up front**; each was converted
+> into a guard (test, constraint, or review rule) *before* coding, and instances are
+> logged here as they occur.
 
 ### 1. Wrong sign in the balance formula (occurred: planning)
 - **What:** First draft of DESIGN.md stated `net = Σ paid − Σ share + Σ settlements received`, which double-counts in the wrong direction — receiving a settlement must *decrease* your net (your credit was consumed), paying one must *increase* it.
@@ -90,6 +90,16 @@ questioned, and usually edited. Concretely:
 - **Risk:** AI invents Prisma/NextAuth options that don't exist (e.g., plausible-but-fake `prisma.$transaction` flags or NextAuth callback names), which compile-fail at best and silently no-op at worst.
 - **Guard:** TypeScript strict mode + every generated config option checked against the installed version's docs; instances logged here as found.
 
-### 13. Off-by-one in largest-remainder distribution (expected, will log instances)
+### 13. UTF-8 BOM in a generated migration file (occurred: deploy)
+- **What:** the initial migration SQL was written via PowerShell 5.1 `Out-File -Encoding utf8`, which prepends a BOM; Postgres rejected the file with a syntax error at position 1 — *the same BOM class our own CSV importer strips (A19)*.
+- **Detected:** `prisma migrate deploy` failed against the production DB; the error position pointed at `﻿`.
+- **Correction:** rewrote the file BOM-less, marked the failed migration rolled back (`prisma migrate resolve`), re-deployed. Lesson: validate generated artifacts with the same rigor as user input — our importer would have caught this in *its* domain.
+
+### 14. Unexamined platform default: Node 18 + npm 9 on the build host (occurred: deploy)
+- **What:** the deploy assumed the build host would match local Node 22; Railway's builder defaulted to Node 18 with npm 9, whose optional-dependency bug (npm/cli#4828) silently skipped Tailwind's Linux native binding — build failed with "Cannot find native binding".
+- **Detected:** Railway build logs showed `setup │ nodejs_18, npm-9_x` next to the webpack error.
+- **Correction:** pinned `"engines": { "node": "22.x" }` in package.json so every environment resolves the same runtime. Lesson: a lockfile pins packages, not the platform.
+
+### 15. Off-by-one in largest-remainder distribution (expected, will log instances)
 - **Risk:** the classic generated bug distributes `remainder` cents starting at index 1 or distributes `n − remainder` — sums still *look* right in the happy path.
 - **Guard:** property-style test: for 1,000 random (amount, n) pairs, assert Σ shares == amount and max(share) − min(share) ≤ 1.

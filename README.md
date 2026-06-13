@@ -5,7 +5,8 @@ Track group expenses with multiple split types, derive who-owes-whom balances, r
 settlements, and import expense history from CSV with full anomaly detection and a
 downloadable import report.
 
-**Live demo:** _TODO after deploy_ · **Demo credentials:** _TODO_
+**Live demo:** https://web-production-e3ec7.up.railway.app · **Demo credentials:**
+`alice@example.com` / `password123` (also `bob@` and `carol@example.com`)
 
 ## Features
 
@@ -21,9 +22,10 @@ downloadable import report.
 
 ## Stack
 
-Next.js (App Router, TypeScript) · Prisma · PostgreSQL (Neon in production, Prisma
+Next.js (App Router, TypeScript) · Prisma · PostgreSQL (Railway in production, Prisma
 local Postgres in dev) · Tailwind v4 · NextAuth (credentials) · Vitest · deployed on
-Vercel. Rationale for every choice: [DECISIONS.md](DECISIONS.md).
+Railway (app + database in one project, migrations run on every deploy via
+`preDeployCommand`). Rationale for every choice: [DECISIONS.md](DECISIONS.md).
 
 ## Documentation
 
