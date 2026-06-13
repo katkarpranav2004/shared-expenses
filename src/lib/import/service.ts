@@ -6,25 +6,22 @@ import { validateCsv } from "./validate";
 import type { ValidationCtx, ValidationResult } from "./types";
 
 export async function buildValidationCtx(groupId: string): Promise<ValidationCtx> {
-  const [members, priorRows, existingExpenses] = await Promise.all([
-    // ALL members including departed — membership timing (A13) needs them.
+  const [group, members, priorRows] = await Promise.all([
+    prisma.group.findUnique({ where: { id: groupId }, select: { baseCurrency: true } }),
+    // ALL members including departed — membership timing needs them.
     prisma.groupMember.findMany({
       where: { groupId },
       include: { user: { select: { id: true, name: true, email: true } } },
     }),
-    // Hashes from every previous batch in this group (idempotency, A11).
+    // Hashes from every previous batch in this group (idempotency).
     prisma.importRow.findMany({
-      where: { batch: { groupId }, outcome: { in: ["IMPORTED", "FLAGGED"] } },
+      where: { batch: { groupId }, outcome: { in: ["IMPORTED", "FLAGGED", "RECLASSIFIED"] } },
       select: { rowHash: true },
-    }),
-    // Near-duplicate keys against already-existing expenses (A12).
-    prisma.expense.findMany({
-      where: { groupId },
-      select: { date: true, paidById: true, amountCents: true },
     }),
   ]);
 
   return {
+    baseCurrency: group?.baseCurrency ?? "INR",
     members: members.map((m) => ({
       userId: m.user.id,
       name: m.user.name,
@@ -33,11 +30,6 @@ export async function buildValidationCtx(groupId: string): Promise<ValidationCtx
       leftAt: m.leftAt,
     })),
     existingHashes: new Set(priorRows.map((r) => r.rowHash)),
-    existingNearKeys: new Set(
-      existingExpenses.map(
-        (e) => `${e.date.toISOString().slice(0, 10)}|${e.paidById}|${e.amountCents}`,
-      ),
-    ),
     today: new Date(),
   };
 }
@@ -66,12 +58,13 @@ export async function commitImport(
         flaggedRows: result.summary.flagged,
         rejectedRows: result.summary.rejected,
         duplicateRows: result.summary.duplicate,
+        reclassifiedRows: result.summary.reclassified,
         emptyRows: result.summary.empty,
       },
     });
 
     for (const row of result.rows) {
-      if (row.outcome === "EMPTY") continue; // counted in the batch, not persisted (A20)
+      if (row.outcome === "EMPTY") continue; // counted in the batch, not persisted
 
       const importRow = await tx.importRow.create({
         data: {
@@ -85,16 +78,37 @@ export async function commitImport(
       });
 
       if ((row.outcome === "IMPORTED" || row.outcome === "FLAGGED") && row.expense) {
+        const e = row.expense;
         await tx.expense.create({
           data: {
             groupId,
-            paidById: row.expense.paidById,
-            description: row.expense.description,
-            amountCents: row.expense.amountCents,
-            date: new Date(`${row.expense.date}T00:00:00Z`),
-            splitType: row.expense.splitType,
+            paidById: e.paidById,
+            description: e.description,
+            amountCents: e.amountCents,
+            originalAmountCents: e.originalAmountCents,
+            currency: e.currency,
+            fxRateBp: e.fxRateBp,
+            isRefund: e.isRefund ?? false,
+            notes: e.notes ?? null,
+            date: new Date(`${e.date}T00:00:00Z`),
+            splitType: e.splitType,
             importRowId: importRow.id, // provenance: expense -> CSV line
-            splits: { create: row.expense.splits },
+            splits: { create: e.splits },
+          },
+        });
+      } else if (row.outcome === "RECLASSIFIED" && row.settlement) {
+        const s = row.settlement;
+        await tx.settlement.create({
+          data: {
+            groupId,
+            fromUserId: s.fromUserId,
+            toUserId: s.toUserId,
+            amountCents: s.amountCents,
+            originalAmountCents: s.originalAmountCents,
+            currency: s.currency,
+            fxRateBp: s.fxRateBp,
+            date: new Date(`${s.date}T00:00:00Z`),
+            note: s.note ?? null,
           },
         });
       }

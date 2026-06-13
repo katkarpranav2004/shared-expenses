@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { validateCsv } from "./validate";
-import type { MemberCtx, ValidationCtx } from "./types";
+import type { MemberCtx, RowResult, ValidationCtx } from "./types";
 
 const member = (
   userId: string,
   name: string,
-  joined = "2024-01-01",
+  joined = "2026-02-01",
   left: string | null = null,
 ): MemberCtx => ({
   userId,
@@ -15,208 +17,224 @@ const member = (
   leftAt: left ? new Date(`${left}T00:00:00Z`) : null,
 });
 
-const baseCtx = (): ValidationCtx => ({
-  members: [
-    member("u1", "Alice"),
-    member("u2", "Bob"),
-    member("u3", "Carol"),
-    member("u4", "Sarah", "2024-01-01", "2024-03-01"), // left
-  ],
+// Mirrors the seeded "Flat 4B" membership timeline.
+const flatmates = (): MemberCtx[] => [
+  member("aisha", "Aisha"),
+  member("rohan", "Rohan"),
+  member("priya", "Priya"),
+  member("meera", "Meera", "2026-02-01", "2026-03-31"),
+  member("dev", "Dev"),
+  member("sam", "Sam", "2026-04-08"),
+];
+
+const ctx = (over: Partial<ValidationCtx> = {}): ValidationCtx => ({
+  members: flatmates(),
+  baseCurrency: "INR",
   existingHashes: new Set(),
-  existingNearKeys: new Set(),
   today: new Date("2026-06-13T00:00:00Z"),
+  ...over,
 });
 
-const HEADER = "date,description,amount,paid_by,split_type,participants,splits";
+const HEADER =
+  "date,description,paid_by,amount,currency,split_type,split_with,split_details,notes";
 const csv = (...rows: string[]) => [HEADER, ...rows].join("\n");
+const run = (text: string, c = ctx()) => validateCsv(text, c);
+const reasons = (r: RowResult) => r.reasons;
 
-const run = (text: string, ctx = baseCtx()) => validateCsv(text, ctx);
-
-describe("validateCsv — happy path", () => {
-  it("imports a clean equal split with exact cents", () => {
-    const res = run(csv("2024-02-10,Dinner,100.00,Alice,EQUAL,Alice;Bob;Carol,"));
-    expect(res.ok).toBe(true);
+describe("real-format basics", () => {
+  it("imports a clean equal INR row with exact paise", () => {
+    const res = run(csv("01-02-2026,February rent,Aisha,48000,INR,equal,Aisha;Rohan;Priya;Meera,,"));
     const row = res.rows[0];
     expect(row.outcome).toBe("IMPORTED");
-    expect(row.expense!.amountCents).toBe(10000);
-    const shares = row.expense!.splits.map((s) => s.shareCents);
-    expect(shares.reduce((a, b) => a + b, 0)).toBe(10000);
-    expect(Math.max(...shares) - Math.min(...shares)).toBeLessThanOrEqual(1);
-  });
-
-  it("imports EXACT and PERCENTAGE splits", () => {
-    const res = run(
-      csv(
-        "2024-02-10,Taxi,30.00,Bob,EXACT,Alice;Bob,Alice=10.00;Bob=20.00",
-        "2024-02-11,Hotel,200.00,Carol,PERCENTAGE,Alice;Carol,Alice=25;Carol=75",
-      ),
-    );
-    expect(res.rows[0].outcome).toBe("IMPORTED");
-    expect(res.rows[1].outcome).toBe("IMPORTED");
-    expect(res.rows[1].expense!.splits.find((s) => s.userId === "u1")!.shareCents).toBe(5000);
+    expect(row.expense!.amountCents).toBe(4_800_000); // ₹48,000 = 4.8M paise
+    const sum = row.expense!.splits.reduce((a, s) => a + s.shareCents, 0);
+    expect(sum).toBe(4_800_000);
   });
 });
 
-describe("validateCsv — anomalies", () => {
-  it("A1 malformed row (wrong column count)", () => {
-    const res = run(csv("2024-02-10,Dinner,100.00"));
-    expect(res.rows[0].outcome).toBe("REJECTED");
-    expect(res.rows[0].reasons).toContain("MALFORMED_ROW");
+describe("dates (DD-MM-YYYY)", () => {
+  it("parses DD-MM-YYYY", () => {
+    expect(run(csv("03-02-2026,X,Aisha,100,INR,equal,Aisha;Rohan,,")).rows[0].expense!.date).toBe("2026-02-03");
   });
-
-  it("A2 missing required field", () => {
-    const res = run(csv("2024-02-10,Dinner,,Alice,EQUAL,Alice;Bob,"));
-    expect(res.rows[0].outcome).toBe("REJECTED");
-    expect(res.rows[0].reasons).toContain("MISSING_REQUIRED_FIELD");
+  it("flags Mon-DD with inferred year", () => {
+    const r = run(csv("Mar-14,Airport cab,Aisha,1100,INR,equal,Aisha;Rohan,,")).rows[0];
+    expect(r.outcome).toBe("FLAGGED");
+    expect(reasons(r)).toContain("DATE_AMBIGUOUS");
+    expect(r.expense!.date).toBe("2026-03-14");
   });
-
-  it("A3 invalid amount rejected; $-grouping normalized with note", () => {
-    const bad = run(csv("2024-02-10,Dinner,1.2.3,Alice,EQUAL,Alice;Bob,"));
-    expect(bad.rows[0].reasons).toContain("INVALID_AMOUNT");
-    const ok = run(csv('2024-02-10,Dinner,"$1,200.50",Alice,EQUAL,Alice;Bob,'));
-    expect(ok.rows[0].outcome).toBe("IMPORTED");
-    expect(ok.rows[0].reasons).toContain("AMOUNT_NORMALIZED");
-    expect(ok.rows[0].expense!.amountCents).toBe(120050);
-  });
-
-  it("A4 excess precision, A5 negative, A6 zero — all rejected", () => {
+  it("flags an out-of-sequence date spike (04-05 between March and April)", () => {
     const res = run(
       csv(
-        "2024-02-10,Gas,33.333,Alice,EQUAL,Alice;Bob,",
-        "2024-02-10,Refund,-25.00,Alice,EQUAL,Alice;Bob,",
-        "2024-02-10,Nothing,0.00,Alice,EQUAL,Alice;Bob,",
+        "28-03-2026,Farewell,Aisha,4800,INR,equal,Aisha;Rohan;Priya,,",
+        "04-05-2026,Deep cleaning,Rohan,2500,INR,equal,Aisha;Rohan;Priya,,",
+        "01-04-2026,April rent,Aisha,4800,INR,equal,Aisha;Rohan;Priya,,",
       ),
     );
-    expect(res.rows[0].reasons).toContain("EXCESS_PRECISION");
-    expect(res.rows[1].reasons).toContain("NEGATIVE_AMOUNT");
-    expect(res.rows[2].reasons).toContain("ZERO_AMOUNT");
-    expect(res.summary.rejected).toBe(3);
+    const spike = res.rows[1];
+    expect(spike.expense!.date).toBe("2026-05-04");
+    expect(reasons(spike)).toContain("DATE_AMBIGUOUS");
   });
+});
 
-  it("A7 impossible date rejected — JS Date must not roll Feb 30 to Mar 1", () => {
-    const res = run(csv("2024-02-30,Dinner,50.00,Alice,EQUAL,Alice;Bob,"));
-    expect(res.rows[0].outcome).toBe("REJECTED");
-    expect(res.rows[0].reasons).toContain("INVALID_DATE");
+describe("amounts", () => {
+  it("normalizes thousands separator", () => {
+    const r = run(csv('10-02-2026,Electricity,Aisha,"1,200",INR,equal,Aisha;Rohan,,')).rows[0];
+    expect(r.expense!.originalAmountCents).toBe(120000);
+    expect(reasons(r)).toContain("AMOUNT_NORMALIZED");
   });
-
-  it("A8 future date imported but flagged", () => {
-    const res = run(csv("2027-01-05,Advance booking,50.00,Alice,EQUAL,Alice;Bob,"));
-    expect(res.rows[0].outcome).toBe("FLAGGED");
-    expect(res.rows[0].reasons).toContain("FUTURE_DATE");
+  it("rejects sub-unit precision (899.995)", () => {
+    const r = run(csv("15-02-2026,Cylinder,Rohan,899.995,INR,equal,Aisha;Rohan,,")).rows[0];
+    expect(r.outcome).toBe("REJECTED");
+    expect(reasons(r)).toContain("EXCESS_PRECISION");
   });
-
-  it("A9 unknown user rejected with closest-match hint", () => {
-    const res = run(csv("2024-02-10,Dinner,50.00,Alise,EQUAL,Alise;Bob,"));
-    expect(res.rows[0].outcome).toBe("REJECTED");
-    expect(res.rows[0].reasons).toContain("UNKNOWN_USER");
-    expect(res.rows[0].messages.join(" ")).toMatch(/Closest match/);
+  it("rejects zero", () => {
+    const r = run(csv("22-03-2026,Swiggy,Priya,0,INR,equal,Aisha;Priya,,")).rows[0];
+    expect(r.outcome).toBe("REJECTED");
+    expect(reasons(r)).toContain("ZERO_AMOUNT");
   });
-
-  it("A11 exact duplicates within file and across batches are skipped", () => {
-    const line = "2024-02-10,Dinner,100.00,Alice,EQUAL,Alice;Bob;Carol,";
-    const first = run(csv(line, line));
-    expect(first.rows[0].outcome).toBe("IMPORTED");
-    expect(first.rows[1].outcome).toBe("DUPLICATE");
-
-    const ctx = baseCtx();
-    ctx.existingHashes = new Set([first.rows[0].hash]);
-    const second = run(csv(line), ctx);
-    expect(second.rows[0].outcome).toBe("DUPLICATE");
-    expect(second.summary.imported).toBe(0); // idempotency
+  it("treats a negative amount as a refund (flag), not a reject", () => {
+    const r = run(csv("12-03-2026,Parasailing refund,Dev,-30,USD,equal,Aisha;Rohan;Priya;Dev,,")).rows[0];
+    expect(r.outcome).toBe("FLAGGED");
+    expect(reasons(r)).toContain("NEGATIVE_AMOUNT");
+    expect(r.expense!.isRefund).toBe(true);
   });
+});
 
-  it("A12 near-duplicate (same payer/amount/date, different description) flagged not skipped", () => {
+describe("currency", () => {
+  it("converts USD to INR at the documented rate (1 USD = ₹83) and keeps the original", () => {
+    const r = run(csv("09-03-2026,Goa villa,Dev,540,USD,equal,Aisha;Rohan;Priya;Dev,,")).rows[0];
+    expect(r.outcome).toBe("FLAGGED");
+    expect(reasons(r)).toContain("FOREIGN_CURRENCY");
+    expect(r.expense!.currency).toBe("USD");
+    expect(r.expense!.originalAmountCents).toBe(54000); // $540.00
+    expect(r.expense!.amountCents).toBe(4_482_000); // ₹44,820.00
+  });
+  it("defaults missing currency to base and flags it", () => {
+    const r = run(csv("15-03-2026,Groceries,Priya,2105,,equal,Aisha;Rohan;Priya,,")).rows[0];
+    expect(reasons(r)).toContain("MISSING_CURRENCY");
+    expect(r.expense!.currency).toBe("INR");
+  });
+});
+
+describe("split types", () => {
+  it("treats 'unequal' as EXACT and validates the sum", () => {
+    const r = run(csv("20-02-2026,Cake,Rohan,1500,INR,unequal,Rohan;Priya;Meera,Rohan 700; Priya 400; Meera 400,")).rows[0];
+    expect(r.outcome).not.toBe("REJECTED");
+    expect(reasons(r)).toContain("SPLIT_TYPE_NORMALIZED");
+    const shares = Object.fromEntries(r.expense!.splits.map((s) => [s.userId, s.shareCents]));
+    expect(shares.rohan).toBe(70000);
+  });
+  it("supports SHARE (ratio) splits", () => {
+    const r = run(csv("10-03-2026,Scooters,Priya,3600,INR,share,Aisha;Rohan;Priya;Dev,Aisha 1; Rohan 2; Priya 1; Dev 2,")).rows[0];
+    expect(r.outcome).toBe("IMPORTED");
+    const shares = Object.fromEntries(r.expense!.splits.map((s) => [s.userId, s.shareCents]));
+    // 3600 over ratio 1:2:1:2 (=6 parts, ₹600/part) → 600/1200/600/1200
+    expect(shares.aisha).toBe(60000);
+    expect(shares.rohan).toBe(120000);
+    expect(shares.dev).toBe(120000);
+    expect(r.expense!.splits.reduce((a, s) => a + s.shareCents, 0)).toBe(360000);
+  });
+  it("rejects percentages that don't sum to 100 (110%)", () => {
+    const r = run(csv("28-02-2026,Pizza,Aisha,1440,INR,percentage,Aisha;Rohan;Priya;Meera,Aisha 30%; Rohan 30%; Priya 30%; Meera 20%,")).rows[0];
+    expect(r.outcome).toBe("REJECTED");
+    expect(reasons(r)).toContain("PERCENT_SUM_MISMATCH");
+  });
+  it("flags split_type=equal with stray split_details, honoring EQUAL", () => {
+    const r = run(csv("18-04-2026,Furniture,Aisha,12000,INR,equal,Aisha;Rohan;Priya;Sam,Aisha 1; Rohan 1; Priya 1; Sam 1,")).rows[0];
+    expect(reasons(r)).toContain("SPLIT_TYPE_DETAIL_CONFLICT");
+    expect(r.expense!.splitType).toBe("EQUAL");
+  });
+});
+
+describe("identity & membership", () => {
+  it("attributes 'Priya S' to Priya and flags it", () => {
+    const r = run(csv("18-02-2026,Groceries,Priya S,1875,INR,equal,Aisha;Rohan;Priya,,")).rows[0];
+    expect(reasons(r)).toContain("AMBIGUOUS_IDENTITY");
+    expect(r.expense!.paidById).toBe("priya");
+  });
+  it("rejects an unknown guest (Kabir) with no close match", () => {
+    const r = run(csv("11-03-2026,Parasailing,Dev,150,USD,equal,Aisha;Rohan;Priya;Dev;Dev's friend Kabir,,")).rows[0];
+    expect(r.outcome).toBe("REJECTED");
+    expect(reasons(r)).toContain("UNKNOWN_USER");
+  });
+  it("flags an expense dated after a member left", () => {
+    const r = run(csv("02-04-2026,Groceries,Priya,2640,INR,equal,Aisha;Rohan;Priya;Meera,,")).rows[0];
+    expect(reasons(r)).toContain("MEMBERSHIP_TIMING");
+  });
+});
+
+describe("settlements, duplicates, conflicts", () => {
+  it("reclassifies a settlement-as-expense (empty split_type, single counterpart)", () => {
+    const res = run(csv("25-02-2026,Rohan paid Aisha back,Rohan,5000,INR,,Aisha,,"));
+    const r = res.rows[0];
+    expect(r.outcome).toBe("RECLASSIFIED");
+    expect(reasons(r)).toContain("SETTLEMENT_AS_EXPENSE");
+    expect(r.settlement!.fromUserId).toBe("rohan");
+    expect(r.settlement!.toUserId).toBe("aisha");
+    expect(r.settlement!.amountCents).toBe(500000);
+  });
+  it("skips an exact duplicate (same date/payer/amount, cosmetically different description)", () => {
     const res = run(
       csv(
-        "2024-02-10,Dinner,40.00,Alice,EQUAL,Alice;Bob,",
-        "2024-02-10,Diner,40.00,Alice,EQUAL,Alice;Bob,",
+        "08-02-2026,Dinner at Marina Bites,Dev,3200,INR,equal,Aisha;Rohan;Priya;Dev,,",
+        "08-02-2026,dinner - marina bites,Dev,3200,INR,equal,Aisha;Rohan;Priya;Dev,,",
       ),
     );
     expect(res.rows[0].outcome).toBe("IMPORTED");
-    expect(res.rows[1].outcome).toBe("FLAGGED");
-    expect(res.rows[1].reasons).toContain("NEAR_DUPLICATE");
+    expect(res.rows[1].outcome).toBe("DUPLICATE");
   });
-
-  it("A13 membership timing: expense after member left is rejected", () => {
-    const res = run(csv("2024-03-15,Gas,60.00,Sarah,EQUAL,Sarah;Bob,"));
-    expect(res.rows[0].outcome).toBe("REJECTED");
-    expect(res.rows[0].reasons).toContain("MEMBERSHIP_TIMING");
-    expect(res.rows[0].messages.join(" ")).toMatch(/left the group/);
-  });
-
-  it("A13 membership timing: expense while member was active imports fine", () => {
-    const res = run(csv("2024-02-15,Gas,60.00,Sarah,EQUAL,Sarah;Bob,"));
-    expect(res.rows[0].outcome).toBe("IMPORTED");
-  });
-
-  it("A14 exact splits must sum to total", () => {
-    const res = run(csv("2024-02-10,Taxi,100.00,Bob,EXACT,Alice;Bob,Alice=40.00;Bob=55.00"));
-    expect(res.rows[0].outcome).toBe("REJECTED");
-    expect(res.rows[0].reasons).toContain("SPLIT_SUM_MISMATCH");
-  });
-
-  it("A15 percentages must sum to 100 (±0.01 tolerance)", () => {
-    const bad = run(csv("2024-02-10,Hotel,100.00,Bob,PERCENTAGE,Alice;Bob,Alice=50;Bob=40"));
-    expect(bad.rows[0].reasons).toContain("PERCENT_SUM_MISMATCH");
-    const thirds = run(
-      csv("2024-02-10,Hotel,100.00,Bob,PERCENTAGE,Alice;Bob;Carol,Alice=33.33;Bob=33.33;Carol=33.34"),
-    );
-    expect(thirds.rows[0].outcome).toBe("IMPORTED");
-    const sum = thirds.rows[0].expense!.splits.reduce((a, s) => a + s.shareCents, 0);
-    expect(sum).toBe(10000);
-  });
-
-  it("A16 unknown split type rejected; aliases normalized", () => {
-    const bad = run(csv("2024-02-10,Dinner,50.00,Alice,shares,Alice;Bob,"));
-    expect(bad.rows[0].reasons).toContain("INVALID_SPLIT_TYPE");
-    const alias = run(csv("2024-02-10,Dinner,50.00,Alice,equally,Alice;Bob,"));
-    expect(alias.rows[0].outcome).toBe("IMPORTED");
-    expect(alias.rows[0].reasons).toContain("SPLIT_TYPE_NORMALIZED");
-  });
-
-  it("A17 self-only expense imported but flagged, contributes zero net", () => {
-    const res = run(csv("2024-02-10,Souvenir,20.00,Alice,EQUAL,Alice,"));
-    expect(res.rows[0].outcome).toBe("FLAGGED");
-    expect(res.rows[0].reasons).toContain("SELF_ONLY_EXPENSE");
-    expect(res.rows[0].expense!.splits).toEqual([{ userId: "u1", shareCents: 2000 }]);
-  });
-
-  it("A18 foreign currency rejected, never converted", () => {
-    const res = run(csv("2024-02-10,Dinner,€50,Alice,EQUAL,Alice;Bob,"));
-    expect(res.rows[0].outcome).toBe("REJECTED");
-    expect(res.rows[0].reasons).toContain("CURRENCY_MISMATCH");
-  });
-
-  it("A19 whitespace/case noise is normalized, not fatal", () => {
-    const res = run(csv("2024-02-10,Dinner,50.00,  alice  ,EQUAL, ALICE ;bob,"));
-    expect(res.rows[0].outcome).toBe("IMPORTED");
-    expect(res.summary.normalizedWhitespace).toBe(1);
-  });
-
-  it("A20 empty rows counted, not rejected", () => {
-    const res = run(csv("2024-02-10,Dinner,50.00,Alice,EQUAL,Alice;Bob,", ",,,,,,", ""));
-    expect(res.summary.empty).toBeGreaterThanOrEqual(1);
-    expect(res.summary.rejected).toBe(0);
-  });
-
-  it("file-level: missing required header columns", () => {
-    const res = validateCsv("date,amount\n2024-01-01,5", baseCtx());
-    expect(res.ok).toBe(false);
-    expect(res.fileError).toMatch(/missing required column/i);
-  });
-
-  it("every row is accounted for (SCOPE.md §5.5)", () => {
+  it("flags BOTH conflicting duplicates (same day+description, different payer/amount)", () => {
     const res = run(
       csv(
-        "2024-02-10,Dinner,100.00,Alice,EQUAL,Alice;Bob;Carol,",
-        "2024-02-10,Dinner,100.00,Alice,EQUAL,Alice;Bob;Carol,", // dup
-        "2024-02-30,Bad date,50.00,Alice,EQUAL,Alice;Bob,", // rejected
-        "2027-01-05,Future,50.00,Alice,EQUAL,Alice;Bob,", // flagged
-        ",,,,,,", // empty
+        "11-03-2026,Dinner at Thalassa,Aisha,2400,INR,equal,Aisha;Rohan;Priya;Dev,,",
+        "11-03-2026,Thalassa dinner,Rohan,2450,INR,equal,Aisha;Rohan;Priya;Dev,,",
       ),
     );
+    expect(res.rows[0].reasons).toContain("CONFLICTING_DUPLICATE");
+    expect(res.rows[1].reasons).toContain("CONFLICTING_DUPLICATE");
+    expect(res.rows.every((r) => r.outcome === "FLAGGED")).toBe(true);
+  });
+  it("is idempotent: re-running with prior hashes imports nothing", () => {
+    const line = "01-02-2026,February rent,Aisha,48000,INR,equal,Aisha;Rohan;Priya;Meera,,";
+    const first = run(csv(line));
+    const again = run(csv(line), ctx({ existingHashes: new Set([first.rows[0].hash]) }));
+    expect(again.rows[0].outcome).toBe("DUPLICATE");
+  });
+
+  it("is idempotent for reclassified settlements too", () => {
+    const line = "25-02-2026,Rohan paid Aisha back,Rohan,5000,INR,,Aisha,,";
+    const first = run(csv(line));
+    expect(first.rows[0].outcome).toBe("RECLASSIFIED");
+    const again = run(csv(line), ctx({ existingHashes: new Set([first.rows[0].hash]) }));
+    expect(again.rows[0].outcome).toBe("DUPLICATE");
+  });
+});
+
+describe("the real expenses_export.csv", () => {
+  const text = readFileSync(resolve(process.cwd(), "public/expenses_export.csv"), "utf8");
+  const res = run(text);
+
+  it("ingests the file and accounts for every row", () => {
+    expect(res.ok).toBe(true);
     const s = res.summary;
-    expect(s.imported + s.flagged + s.rejected + s.duplicate + s.empty).toBe(s.total);
-    expect(s.total).toBe(5);
+    expect(s.imported + s.flagged + s.rejected + s.duplicate + s.reclassified + s.empty).toBe(s.total);
+  });
+
+  it("detects the headline anomalies", () => {
+    const s = res.summary;
+    expect(s.reclassified).toBeGreaterThanOrEqual(1); // Rohan paid Aisha back
+    expect(s.duplicate).toBeGreaterThanOrEqual(1); // Marina Bites
+    expect(s.rejected).toBeGreaterThanOrEqual(3); // 899.995, 0, 110%, missing payer...
+    expect(s.convertedCurrency).toBeGreaterThanOrEqual(3); // USD rows
+    expect(s.flagged).toBeGreaterThanOrEqual(5);
+  });
+
+  it("never imports a split whose shares don't sum to the (base) amount", () => {
+    for (const row of res.rows) {
+      if ((row.outcome === "IMPORTED" || row.outcome === "FLAGGED") && row.expense) {
+        const sum = row.expense.splits.reduce((a, x) => a + x.shareCents, 0);
+        expect(sum, `row ${row.rowNumber}`).toBe(row.expense.amountCents);
+      }
+    }
   });
 });

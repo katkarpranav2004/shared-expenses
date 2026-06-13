@@ -1,32 +1,53 @@
 // Anomaly codes — shared language between SCOPE.md, the API error shape,
-// the import report, and the tests. One code per anomaly class.
+// the import report, and the tests. One code per anomaly class in the real CSV.
 
 export const ANOMALY = {
-  MALFORMED_ROW: "MALFORMED_ROW", // A1
-  MISSING_REQUIRED_FIELD: "MISSING_REQUIRED_FIELD", // A2
-  INVALID_AMOUNT: "INVALID_AMOUNT", // A3
-  AMOUNT_NORMALIZED: "AMOUNT_NORMALIZED", // A3 (normalize note)
-  EXCESS_PRECISION: "EXCESS_PRECISION", // A4
-  NEGATIVE_AMOUNT: "NEGATIVE_AMOUNT", // A5
-  ZERO_AMOUNT: "ZERO_AMOUNT", // A6
-  INVALID_DATE: "INVALID_DATE", // A7
-  FUTURE_DATE: "FUTURE_DATE", // A8 (flag)
-  UNKNOWN_USER: "UNKNOWN_USER", // A9
-  DUPLICATE_ROW: "DUPLICATE_ROW", // A11
-  NEAR_DUPLICATE: "NEAR_DUPLICATE", // A12 (flag)
-  MEMBERSHIP_TIMING: "MEMBERSHIP_TIMING", // A13
-  SPLIT_SUM_MISMATCH: "SPLIT_SUM_MISMATCH", // A14
-  PERCENT_SUM_MISMATCH: "PERCENT_SUM_MISMATCH", // A15
-  INVALID_SPLIT_TYPE: "INVALID_SPLIT_TYPE", // A16
-  SPLIT_TYPE_NORMALIZED: "SPLIT_TYPE_NORMALIZED", // A16 (alias note)
-  SELF_ONLY_EXPENSE: "SELF_ONLY_EXPENSE", // A17 (flag)
-  CURRENCY_MISMATCH: "CURRENCY_MISMATCH", // A18
-  DUPLICATE_PARTICIPANT: "DUPLICATE_PARTICIPANT", // participant listed twice
+  // structural
+  MALFORMED_ROW: "MALFORMED_ROW",
+  MISSING_REQUIRED_FIELD: "MISSING_REQUIRED_FIELD",
+  EMPTY_ROW: "EMPTY_ROW",
+  // dates
+  DATE_AMBIGUOUS: "DATE_AMBIGUOUS", // flag (Mar-14 inferred year, 04-05 out of sequence)
+  INVALID_DATE: "INVALID_DATE", // reject
+  // amounts
+  AMOUNT_NORMALIZED: "AMOUNT_NORMALIZED", // note (thousands separator)
+  EXCESS_PRECISION: "EXCESS_PRECISION", // reject (899.995)
+  ZERO_AMOUNT: "ZERO_AMOUNT", // reject
+  NEGATIVE_AMOUNT: "NEGATIVE_AMOUNT", // reclassify → refund (flag)
+  INVALID_AMOUNT: "INVALID_AMOUNT", // reject
+  // currency
+  MISSING_CURRENCY: "MISSING_CURRENCY", // normalize → base, flag
+  FOREIGN_CURRENCY: "FOREIGN_CURRENCY", // converted to base, note
+  UNSUPPORTED_CURRENCY: "UNSUPPORTED_CURRENCY", // reject (no rate)
+  // identity
+  UNKNOWN_USER: "UNKNOWN_USER", // reject (Kabir)
+  AMBIGUOUS_IDENTITY: "AMBIGUOUS_IDENTITY", // flag, attribute to closest (Priya S)
+  WHITESPACE_CASE: "WHITESPACE_CASE", // normalize (count)
+  DUPLICATE_PARTICIPANT: "DUPLICATE_PARTICIPANT", // reject
+  MEMBERSHIP_TIMING: "MEMBERSHIP_TIMING", // flag (Meera after move-out)
+  // splits
+  SPLIT_TYPE_NORMALIZED: "SPLIT_TYPE_NORMALIZED", // note (unequal → EXACT)
+  INVALID_SPLIT_TYPE: "INVALID_SPLIT_TYPE", // reject
+  SPLIT_SUM_MISMATCH: "SPLIT_SUM_MISMATCH", // reject (exact/share details bad)
+  PERCENT_SUM_MISMATCH: "PERCENT_SUM_MISMATCH", // reject (110%)
+  SPLIT_TYPE_DETAIL_CONFLICT: "SPLIT_TYPE_DETAIL_CONFLICT", // flag (equal + details)
+  SELF_ONLY_EXPENSE: "SELF_ONLY_EXPENSE", // flag (net-zero)
+  ONE_SIDED_EXPENSE: "ONE_SIDED_EXPENSE", // flag (payer covers a single other — possible transfer)
+  // duplicates / settlements
+  DUPLICATE_ROW: "DUPLICATE_ROW", // skip (Marina: same date/payer/amount)
+  CONFLICTING_DUPLICATE: "CONFLICTING_DUPLICATE", // flag both (Thalassa)
+  SETTLEMENT_AS_EXPENSE: "SETTLEMENT_AS_EXPENSE", // reclassify → settlement
 } as const;
 
 export type AnomalyCode = (typeof ANOMALY)[keyof typeof ANOMALY];
 
-export type RowOutcome = "IMPORTED" | "FLAGGED" | "REJECTED" | "DUPLICATE" | "EMPTY";
+export type RowOutcome =
+  | "IMPORTED"
+  | "FLAGGED"
+  | "REJECTED"
+  | "DUPLICATE"
+  | "RECLASSIFIED"
+  | "EMPTY";
 
 export type MemberCtx = {
   userId: string;
@@ -38,20 +59,36 @@ export type MemberCtx = {
 
 export type ValidationCtx = {
   members: MemberCtx[];
-  // sha256 hashes of rows already imported in prior batches (idempotency, A11)
-  existingHashes: Set<string>;
-  // "date|payerId|amountCents" keys of existing expenses (near-duplicates, A12)
-  existingNearKeys: Set<string>;
+  baseCurrency: string; // group base currency (INR)
+  existingHashes: Set<string>; // idempotency vs prior batches
   today: Date;
 };
 
+export type SplitType = "EQUAL" | "EXACT" | "PERCENTAGE" | "SHARE";
+
 export type ParsedExpense = {
-  date: string; // ISO yyyy-mm-dd
+  date: string; // ISO yyyy-mm-dd (base)
   description: string;
-  amountCents: number;
+  currency: string; // original currency as written
+  originalAmountCents: number; // amount in original currency minor units
+  amountCents: number; // BASE (INR paise) — what balance math uses
+  fxRateBp: number; // rate applied (INR per unit × 100)
   paidById: string;
-  splitType: "EQUAL" | "EXACT" | "PERCENTAGE";
-  splits: { userId: string; shareCents: number }[];
+  splitType: SplitType;
+  splits: { userId: string; shareCents: number }[]; // BASE minor units
+  notes?: string;
+  isRefund?: boolean; // negative source amount, modelled as a reversing expense
+};
+
+export type ParsedSettlement = {
+  date: string;
+  fromUserId: string;
+  toUserId: string;
+  currency: string;
+  originalAmountCents: number;
+  amountCents: number; // BASE
+  fxRateBp: number;
+  note?: string;
 };
 
 export type RowResult = {
@@ -60,12 +97,13 @@ export type RowResult = {
   hash: string;
   outcome: RowOutcome;
   reasons: AnomalyCode[];
-  messages: string[]; // human-readable, one per reason
-  expense?: ParsedExpense; // present iff outcome is IMPORTED or FLAGGED
+  messages: string[];
+  expense?: ParsedExpense; // present for IMPORTED / FLAGGED expense rows
+  settlement?: ParsedSettlement; // present for RECLASSIFIED settlement rows
 };
 
 export type ValidationResult = {
-  ok: boolean; // header was usable
+  ok: boolean;
   fileError?: string;
   rows: RowResult[];
   summary: {
@@ -74,17 +112,25 @@ export type ValidationResult = {
     flagged: number;
     rejected: number;
     duplicate: number;
+    reclassified: number;
     empty: number;
     normalizedWhitespace: number;
+    convertedCurrency: number;
   };
 };
 
+// Real expenses_export.csv header. Required columns are matched by name,
+// order-independent; `split_details` and `notes` are optional.
 export const EXPECTED_HEADER = [
   "date",
   "description",
-  "amount",
   "paid_by",
+  "amount",
+  "currency",
   "split_type",
-  "participants",
-  "splits",
+  "split_with",
+  "split_details",
+  "notes",
 ] as const;
+
+export const REQUIRED_HEADER = ["date", "paid_by", "amount", "split_with"] as const;
