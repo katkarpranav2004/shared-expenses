@@ -103,3 +103,23 @@ questioned, and usually edited. Concretely:
 ### 15. Off-by-one in largest-remainder distribution (expected, will log instances)
 - **Risk:** the classic generated bug distributes `remainder` cents starting at index 1 or distributes `n − remainder` — sums still *look* right in the happy path.
 - **Guard:** property-style test: for 1,000 random (amount, n) pairs, assert Σ shares == amount and max(share) − min(share) ≤ 1.
+
+---
+
+> Incidents 16–18 come from planning against an **assumed** CSV before the real file
+> existed — a category of AI error worth naming on its own.
+
+### 16. AI confidently designed anomaly policies for a file it had never seen (occurred: planning, confirmed at handoff)
+- **What:** the first SCOPE.md invented column names (`participants`, `splits`) and an anomaly list, presented as fact. The **real** CSV uses `split_with`, `split_details`, `currency`, `notes`, DD-MM-YYYY dates, a `share` split type, and required USD→INR conversion — several assumptions were simply wrong.
+- **Detected:** the real `expenses_export.csv` arrived and contradicted the assumptions directly.
+- **Correction:** rewrote SCOPE.md against the real 42-row file; kept the validator a pure function keyed to anomaly *classes* so the column-name remap is a small change, not a redesign. Lesson: an AI will produce a polished, plausible spec for data it has never read — treat such specs as hypotheses until checked against the artifact.
+
+### 17. AI's currency policy was the exact bug the assignment tests for (occurred: planning)
+- **What:** the assumed-CSV SCOPE chose to **reject** any foreign-currency row (policy A18). The real assignment *requires* converting USD to INR — Priya's whole complaint is "the sheet pretends a dollar is a rupee." The AI's tidy "reject what we don't support" instinct would have failed the headline requirement.
+- **Detected:** reading Priya's stated need in the PDF against the A18 policy.
+- **Correction:** DECISIONS #16 — convert at import to a base currency, store original + rate. Lesson: "reject the messy thing" is often the AI's easy way out and the wrong product decision.
+
+### 18. AI treated a suggested stack as a hard constraint (averted at handoff)
+- **What:** the new brief listed React+Vite+Express+Vercel/Render/Neon; a naive reading would trigger a full rewrite of the working Next.js+Railway app — directly violating the "minimize changes / don't rebuild" prime rule.
+- **Detected:** the two instructions conflict on their face; resolved by ranking the explicit prime directive above a default stack list.
+- **Correction:** DECISIONS #15 — keep Next.js, because every hard requirement is already met and the domain logic is framework-free. Lesson: when instructions conflict, the AI should surface the conflict and rank by intent, not silently pick the path that means more work.

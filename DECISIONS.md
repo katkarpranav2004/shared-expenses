@@ -219,3 +219,95 @@ needs it) and a `railway.json`. Honest note for the interview: the container mod
 quietly *removed* a risk the docs worried about (serverless cold-start mid-import is
 moot when the server is long-lived; the one-transaction commit guard still matters for
 crashes).
+
+---
+
+> Decisions #15–#21 were made after the **real** assignment + CSV arrived. The guiding
+> constraint was the prime directive: *adapt the existing app, do not rebuild.*
+
+## 15. Migrate the existing Next.js app vs rebuild as React+Vite+Express
+
+**Problem:** The new constraints list React + Vite + Express + Vercel/Render/Neon, but a
+working Next.js + Prisma + Railway app already exists and is deployed.
+
+**Choice:** Keep Next.js; do not rebuild.
+**Reason:** The assignment's hard requirements (login, groups, expenses, multi-currency,
+CSV import, relational DB, public deploy) are all satisfiable in the current stack, and
+the prime directive is to minimize change. A rewrite to Express/React/Vite is HIGH effort
+with zero requirement-level benefit — it would throw away the unit-tested domain core
+(`lib/money`, `lib/split`, `lib/balances`, `lib/import`), which is framework-free and
+would survive the rewrite unchanged anyway. The stack listed in the brief reads as a
+suggested default, not a constraint that overrides "don't rebuild." **Interview answer:**
+"I optimized for the requirement, not the brand of framework; the business logic is
+isolated from Next.js precisely so the framework choice isn't load-bearing."
+
+## 16. Multi-currency: convert to a base currency at import vs store mixed
+
+**Problem:** The CSV mixes INR and USD; balances must sum to zero (impossible across
+currencies); Priya explicitly objects to treating $1 as ₹1.
+
+**Options:** store each amount in its own currency and convert at read time · **convert
+to a base (INR) at import and store both original and base** · reject non-base rows.
+**Choice:** Convert to INR at import using a documented snapshot rate; persist
+`original_amount_cents` + `currency` + `fx_rate_bp` + base `amount_cents`.
+**Reason:** Balance math stays single-currency and exact; the stored rate makes every
+converted number reproducible and auditable ("$540 × 83.00 = ₹44,820" is shown, not
+hidden); the original is preserved for display. Read-time conversion was rejected because
+a fluctuating rate would make historical balances non-reproducible. **Tradeoff to state:**
+a snapshot rate isn't the real rate on each expense's date; acceptable and documented,
+and the schema can later carry a dated rate table without touching the balance engine.
+
+## 17. The "share" (ratio) split type
+
+**Problem:** The CSV uses `share` splits (e.g. scooters `1;2;1;2`, rent `2;1;1`) that the
+app didn't support.
+**Choice:** Add SHARE as a first-class split type: shares = ratio-weighted, allocated by
+largest-remainder so cents still sum exactly.
+**Reason:** It's a genuinely distinct method (someone used more), not expressible as
+EQUAL/EXACT/PERCENTAGE without precomputing — and precomputing is exactly the silent math
+we avoid. **Interview note:** "this is the live-modify question they hinted at (add a split
+type); the allocator is one pure function with a property test."
+
+## 18. Settlement logged as an expense → reclassify
+
+**Problem:** Row 13 ("Rohan paid Aisha back", empty split_type, single counterpart) and
+the Sam deposit row are payments, not consumption.
+**Choice:** Detect (empty/missing split_type + single counterpart, or transfer-signalling
+description) and RECLASSIFY into the settlements table, surfaced in the report.
+**Reason:** Importing a payback as an expense double-counts and corrupts every balance.
+The detection is conservative (flagged, not silent) so a false positive is visible.
+(Alt: import as expense and let the user fix — pushes corruption into the ledger first.)
+
+## 19. Conflicting duplicate (Thalassa) — flag both, never auto-delete
+
+**Problem:** Two rows for the same dinner, different payer (Aisha ₹2400 / Rohan ₹2450);
+"which row wins?"
+**Choice:** Import **both**, flag both as `CONFLICTING_DUPLICATE`, let the user delete one
+in-app.
+**Reason:** Meera's explicit requirement is to approve anything deleted or changed; an
+exact-duplicate (identical) is safe to auto-skip, but a *conflict* (different amount/payer)
+is a judgment call the app must not make silently. (Alt: keep newer / keep the one whose
+notes look right — both are the app guessing about money.)
+
+## 20. Date parsing: DD-MM-YYYY primary, ambiguous flagged
+
+**Problem:** Dates are `DD-MM-YYYY`, with `Mar-14` (no year) and `04-05-2026` (valid DD-MM
+but out of sequence).
+**Choice:** Parse DD-MM-YYYY as the file's convention; infer the year for `Mon-DD` from the
+file; import ambiguous/odd ones with a `DATE_AMBIGUOUS` flag; reject only the genuinely
+unparseable.
+**Reason:** The previous ISO-only parser would reject all 42 rows. We still refuse to let
+JS `Date` silently roll invalid dates (the round-trip check stays). Ambiguity is surfaced,
+not resolved by guessing.
+
+## 21. Membership timing for Meera (left) and Sam (joined)
+
+**Problem:** Meera appears on a post-move-out expense (row 35); Sam appears before his
+mid-April join. Sam's stated need: March shouldn't affect him.
+**Choice:** Check each referenced member's `joined_at ≤ date ≤ left_at` and FLAG
+violations, surfacing them for correction rather than silently dropping the whole expense
+(the *active* members still owe their shares).
+**Reason:** This is the membership-history feature's reason to exist, and it directly
+answers two flatmates' requests. FLAG (not REJECT) because the expense is real for the
+members who were present; only the inactive member's inclusion is wrong. (Alt: reject —
+loses a real expense; auto-extend membership — rewrites who was in the flat when.)
