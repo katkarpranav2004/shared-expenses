@@ -16,6 +16,7 @@ enum SplitType {
   EQUAL
   EXACT
   PERCENTAGE
+  SHARE
 }
 
 enum ImportOutcome {
@@ -23,6 +24,7 @@ enum ImportOutcome {
   FLAGGED
   REJECTED
   DUPLICATE
+  RECLASSIFIED
 }
 
 model User {
@@ -43,11 +45,12 @@ model User {
 }
 
 model Group {
-  id          String        @id @default(cuid())
-  name        String
-  description String?
-  createdById String        @map("created_by_id")
-  createdAt   DateTime      @default(now()) @map("created_at")
+  id           String       @id @default(cuid())
+  name         String
+  description  String?
+  baseCurrency String       @default("INR") @map("base_currency")
+  createdById  String       @map("created_by_id")
+  createdAt    DateTime     @default(now()) @map("created_at")
   createdBy   User          @relation(fields: [createdById], references: [id])
   members     GroupMember[]
   expenses    Expense[]
@@ -73,16 +76,21 @@ model GroupMember {
 }
 
 model Expense {
-  id          String         @id @default(cuid())
-  groupId     String         @map("group_id")
-  paidById    String         @map("paid_by_id")
-  description String
-  amountCents Int            @map("amount_cents")
-  date        DateTime       @db.Date
-  splitType   SplitType      @map("split_type")
-  createdAt   DateTime       @default(now()) @map("created_at")
-  importRowId String?        @unique @map("import_row_id")
-  splits      ExpenseSplit[]
+  id                  String         @id @default(cuid())
+  groupId             String         @map("group_id")
+  paidById            String         @map("paid_by_id")
+  description         String
+  amountCents         Int            @map("amount_cents") // BASE currency minor units
+  originalAmountCents Int            @map("original_amount_cents") // as entered
+  currency            String         @default("INR")
+  fxRateBp            Int            @default(100) @map("fx_rate_bp") // INR per unit x100
+  isRefund            Boolean        @default(false) @map("is_refund")
+  notes               String?
+  date                DateTime       @db.Date
+  splitType           SplitType      @map("split_type")
+  createdAt           DateTime       @default(now()) @map("created_at")
+  importRowId         String?        @unique @map("import_row_id")
+  splits              ExpenseSplit[]
   group       Group          @relation(fields: [groupId], references: [id])
   paidBy      User           @relation("payer", fields: [paidById], references: [id])
   importRow   ImportRow?     @relation(fields: [importRowId], references: [id])
@@ -106,14 +114,17 @@ model ExpenseSplit {
 }
 
 model Settlement {
-  id          String   @id @default(cuid())
-  groupId     String   @map("group_id")
-  fromUserId  String   @map("from_user_id")
-  toUserId    String   @map("to_user_id")
-  amountCents Int      @map("amount_cents")
-  date        DateTime @db.Date
-  note        String?
-  createdAt   DateTime @default(now()) @map("created_at")
+  id                  String   @id @default(cuid())
+  groupId             String   @map("group_id")
+  fromUserId          String   @map("from_user_id")
+  toUserId            String   @map("to_user_id")
+  amountCents         Int      @map("amount_cents") // BASE currency minor units
+  originalAmountCents Int      @default(0) @map("original_amount_cents")
+  currency            String   @default("INR")
+  fxRateBp            Int      @default(100) @map("fx_rate_bp")
+  date                DateTime @db.Date
+  note                String?
+  createdAt           DateTime @default(now()) @map("created_at")
   group       Group    @relation(fields: [groupId], references: [id])
   from        User     @relation("settlement_from", fields: [fromUserId], references: [id])
   to          User     @relation("settlement_to", fields: [toUserId], references: [id])
@@ -132,6 +143,7 @@ model ImportBatch {
   flaggedRows  Int         @map("flagged_rows")
   rejectedRows Int         @map("rejected_rows")
   duplicateRows Int        @map("duplicate_rows")
+  reclassifiedRows Int     @default(0) @map("reclassified_rows")
   emptyRows    Int         @map("empty_rows")
   createdAt    DateTime    @default(now()) @map("created_at")
   rows         ImportRow[]

@@ -5,10 +5,10 @@ CREATE SCHEMA IF NOT EXISTS "public";
 CREATE TYPE "Role" AS ENUM ('ADMIN', 'MEMBER');
 
 -- CreateEnum
-CREATE TYPE "SplitType" AS ENUM ('EQUAL', 'EXACT', 'PERCENTAGE');
+CREATE TYPE "SplitType" AS ENUM ('EQUAL', 'EXACT', 'PERCENTAGE', 'SHARE');
 
 -- CreateEnum
-CREATE TYPE "ImportOutcome" AS ENUM ('IMPORTED', 'FLAGGED', 'REJECTED', 'DUPLICATE');
+CREATE TYPE "ImportOutcome" AS ENUM ('IMPORTED', 'FLAGGED', 'REJECTED', 'DUPLICATE', 'RECLASSIFIED');
 
 -- CreateTable
 CREATE TABLE "users" (
@@ -26,6 +26,7 @@ CREATE TABLE "groups" (
     "id" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "description" TEXT,
+    "base_currency" TEXT NOT NULL DEFAULT 'INR',
     "created_by_id" TEXT NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -51,6 +52,11 @@ CREATE TABLE "expenses" (
     "paid_by_id" TEXT NOT NULL,
     "description" TEXT NOT NULL,
     "amount_cents" INTEGER NOT NULL,
+    "original_amount_cents" INTEGER NOT NULL,
+    "currency" TEXT NOT NULL DEFAULT 'INR',
+    "fx_rate_bp" INTEGER NOT NULL DEFAULT 100,
+    "is_refund" BOOLEAN NOT NULL DEFAULT false,
+    "notes" TEXT,
     "date" DATE NOT NULL,
     "split_type" "SplitType" NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -76,6 +82,9 @@ CREATE TABLE "settlements" (
     "from_user_id" TEXT NOT NULL,
     "to_user_id" TEXT NOT NULL,
     "amount_cents" INTEGER NOT NULL,
+    "original_amount_cents" INTEGER NOT NULL DEFAULT 0,
+    "currency" TEXT NOT NULL DEFAULT 'INR',
+    "fx_rate_bp" INTEGER NOT NULL DEFAULT 100,
     "date" DATE NOT NULL,
     "note" TEXT,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -94,6 +103,7 @@ CREATE TABLE "import_batches" (
     "flagged_rows" INTEGER NOT NULL,
     "rejected_rows" INTEGER NOT NULL,
     "duplicate_rows" INTEGER NOT NULL,
+    "reclassified_rows" INTEGER NOT NULL DEFAULT 0,
     "empty_rows" INTEGER NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 

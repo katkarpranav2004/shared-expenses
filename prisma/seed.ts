@@ -1,121 +1,70 @@
-// Demo data: three users, one group, one expense per split type, one
-// settlement, and a departed member to exercise membership timing.
-// Run: npm run db:seed   (idempotent — upserts by email / skips if present)
+// Demo data mirroring the assignment scenario: the flat-mates group with the
+// real membership timeline (Meera leaves end of March, Sam joins mid-April,
+// Dev is a trip guest). No expenses are seeded — they are loaded by importing
+// public/expenses_export.csv through the app, which is the graded flow.
+//
+// Run: npm run db:seed   (idempotent — skips if the group already exists)
 
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
+const PEOPLE = [
+  { email: "aisha@example.com", name: "Aisha" },
+  { email: "rohan@example.com", name: "Rohan" },
+  { email: "priya@example.com", name: "Priya" },
+  { email: "meera@example.com", name: "Meera" },
+  { email: "dev@example.com", name: "Dev" },
+  { email: "sam@example.com", name: "Sam" },
+];
+
 async function main() {
-  const password = await bcrypt.hash("password123", 12);
+  const passwordHash = await bcrypt.hash("password123", 12);
 
-  const [alice, bob, carol, dave] = await Promise.all(
-    [
-      ["alice@example.com", "Alice"],
-      ["bob@example.com", "Bob"],
-      ["carol@example.com", "Carol"],
-      ["dave@example.com", "Dave"],
-    ].map(([email, name]) =>
-      prisma.user.upsert({
-        where: { email },
-        update: {},
-        create: { email, name, passwordHash: password },
-      }),
-    ),
-  );
+  const users: Record<string, { id: string }> = {};
+  for (const { email, name } of PEOPLE) {
+    users[name] = await prisma.user.upsert({
+      where: { email },
+      update: {},
+      create: { email, name, passwordHash },
+    });
+  }
 
-  const existing = await prisma.group.findFirst({ where: { name: "Goa Trip" } });
-  if (existing) {
+  if (await prisma.group.findFirst({ where: { name: "Flat 4B" } })) {
     console.log("Seed group already exists — skipping.");
     return;
   }
 
-  const group = await prisma.group.create({
+  // Membership timeline (drives the CSV's membership-timing anomalies):
+  //  - Aisha/Rohan/Priya: from the start, never left.
+  //  - Meera: from the start, left 2026-03-31 (moved out end of March).
+  //  - Dev: trip guest, modelled as joined from the start (appears Feb–Mar).
+  //  - Sam: joined 2026-04-08 (moved in, paid his deposit that day).
+  const d = (s: string) => new Date(`${s}T00:00:00Z`);
+  await prisma.group.create({
     data: {
-      name: "Goa Trip",
-      description: "Demo group with all three split types",
-      createdById: alice.id,
+      name: "Flat 4B",
+      description: "Shared flat expenses — Feb–Apr 2026 (import expenses_export.csv)",
+      baseCurrency: "INR",
+      createdById: users.Aisha.id,
       members: {
         create: [
-          { userId: alice.id, role: "ADMIN", joinedAt: new Date("2024-01-01T00:00:00Z") },
-          { userId: bob.id, joinedAt: new Date("2024-01-01T00:00:00Z") },
-          { userId: carol.id, joinedAt: new Date("2024-01-05T00:00:00Z") },
-          {
-            userId: dave.id,
-            joinedAt: new Date("2024-01-01T00:00:00Z"),
-            leftAt: new Date("2024-03-01T00:00:00Z"), // departed member for A13 demos
-          },
+          { userId: users.Aisha.id, role: "ADMIN", joinedAt: d("2026-02-01") },
+          { userId: users.Rohan.id, joinedAt: d("2026-02-01") },
+          { userId: users.Priya.id, joinedAt: d("2026-02-01") },
+          { userId: users.Meera.id, joinedAt: d("2026-02-01"), leftAt: d("2026-03-31") },
+          { userId: users.Dev.id, joinedAt: d("2026-02-01") },
+          { userId: users.Sam.id, joinedAt: d("2026-04-08") },
         ],
       },
     },
   });
 
-  // EQUAL: $100 / 3 -> 3334 + 3333 + 3333 (deterministic by user id order)
-  const ids = [alice.id, bob.id, carol.id].sort();
-  await prisma.expense.create({
-    data: {
-      groupId: group.id,
-      paidById: alice.id,
-      description: "Dinner at Beach Shack",
-      amountCents: 10000,
-      date: new Date("2024-02-10T00:00:00Z"),
-      splitType: "EQUAL",
-      splits: {
-        create: ids.map((userId, i) => ({ userId, shareCents: i === 0 ? 3334 : 3333 })),
-      },
-    },
-  });
-
-  // EXACT: $30 taxi — Bob 20, Alice 10
-  await prisma.expense.create({
-    data: {
-      groupId: group.id,
-      paidById: bob.id,
-      description: "Airport taxi",
-      amountCents: 3000,
-      date: new Date("2024-02-11T00:00:00Z"),
-      splitType: "EXACT",
-      splits: {
-        create: [
-          { userId: alice.id, shareCents: 1000 },
-          { userId: bob.id, shareCents: 2000 },
-        ],
-      },
-    },
-  });
-
-  // PERCENTAGE: $200 hotel — Alice 25%, Carol 75%
-  await prisma.expense.create({
-    data: {
-      groupId: group.id,
-      paidById: carol.id,
-      description: "Hotel (2 nights)",
-      amountCents: 20000,
-      date: new Date("2024-02-12T00:00:00Z"),
-      splitType: "PERCENTAGE",
-      splits: {
-        create: [
-          { userId: alice.id, shareCents: 5000 },
-          { userId: carol.id, shareCents: 15000 },
-        ],
-      },
-    },
-  });
-
-  // One settlement: Bob pays Alice $20
-  await prisma.settlement.create({
-    data: {
-      groupId: group.id,
-      fromUserId: bob.id,
-      toUserId: alice.id,
-      amountCents: 2000,
-      date: new Date("2024-02-15T00:00:00Z"),
-      note: "UPI transfer",
-    },
-  });
-
-  console.log("Seeded: alice/bob/carol/dave@example.com (password: password123), group 'Goa Trip'.");
+  console.log(
+    "Seeded group 'Flat 4B' with Aisha/Rohan/Priya/Meera/Dev/Sam (password: password123).\n" +
+      "Log in as aisha@example.com and import public/expenses_export.csv.",
+  );
 }
 
 main()
