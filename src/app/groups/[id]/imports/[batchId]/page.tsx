@@ -8,6 +8,7 @@ const OUTCOME_STYLE: Record<string, string> = {
   FLAGGED: "bg-amber-100 text-amber-800",
   REJECTED: "bg-red-100 text-red-700",
   DUPLICATE: "bg-slate-200 text-slate-600",
+  RECLASSIFIED: "bg-sky-100 text-sky-800",
 };
 
 export default async function ImportReportPage({
@@ -37,6 +38,7 @@ export default async function ImportReportPage({
     ["Total rows", batch.totalRows],
     ["Imported", batch.importedRows],
     ["Flagged", batch.flaggedRows],
+    ["→ Settlement", batch.reclassifiedRows],
     ["Rejected", batch.rejectedRows],
     ["Duplicates", batch.duplicateRows],
     ["Empty", batch.emptyRows],
@@ -74,7 +76,7 @@ export default async function ImportReportPage({
         </div>
       </div>
 
-      <div className="mt-6 grid grid-cols-3 gap-3 sm:grid-cols-6">
+      <div className="mt-6 grid grid-cols-3 gap-3 sm:grid-cols-7">
         {cells.map(([label, value]) => (
           <div key={label} className="rounded-xl border border-slate-200 bg-white p-3 text-center">
             <p className="text-xl font-bold">{value}</p>

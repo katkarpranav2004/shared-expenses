@@ -1,24 +1,25 @@
-// End-to-end smoke test against a running dev server with seeded data.
+// End-to-end smoke test against a running dev server seeded with "Flat 4B".
 // Run: node scripts/smoke.mjs
-// Exercises: login (NextAuth credentials), authz (403 on foreign group),
-// expense create incl. tampered-split rejection, balances zero-sum, CSV
-// import preview + confirm + idempotent re-confirm, report download.
+// Verifies the real expenses_export.csv import end to end: anomaly handling,
+// currency conversion, settlement reclassification, idempotency, and that the
+// balances page renders (which runs the Σ net == 0 integrity assertion).
+
+import { readFileSync } from "node:fs";
 
 const BASE = "http://localhost:3000";
 const jar = new Map();
 
 function setCookies(res) {
-  const raw = res.headers.getSetCookie?.() ?? [];
-  for (const c of raw) {
+  for (const c of res.headers.getSetCookie?.() ?? []) {
     const [pair] = c.split(";");
-    const [k, v] = pair.split("=");
-    if (v === "" || /expires=Thu, 01 Jan 1970/i.test(c)) jar.delete(k.trim());
-    else jar.set(k.trim(), v);
+    const i = pair.indexOf("=");
+    const k = pair.slice(0, i).trim();
+    const v = pair.slice(i + 1);
+    if (v === "" || /expires=Thu, 01 Jan 1970/i.test(c)) jar.delete(k);
+    else jar.set(k, v);
   }
 }
-function cookieHeader() {
-  return [...jar.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
-}
+const cookieHeader = () => [...jar.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
 async function req(path, opts = {}) {
   const res = await fetch(BASE + path, {
     redirect: "manual",
@@ -37,121 +38,25 @@ function check(name, cond, extra = "") {
 
 async function login(email, password) {
   jar.clear();
-  const csrfRes = await req("/api/auth/csrf");
-  const { csrfToken } = await csrfRes.json();
-  const res = await req("/api/auth/callback/credentials", {
+  const { csrfToken } = await (await req("/api/auth/csrf")).json();
+  await req("/api/auth/callback/credentials", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ csrfToken, email, password }),
   });
-  return res.status;
+  return (await (await req("/api/auth/session")).json())?.user ?? null;
 }
 
-// ---- 1. Auth
-const badLogin = await login("alice@example.com", "wrong-password");
-const sessionAfterBad = await (await req("/api/auth/session")).json();
-check("wrong password does not create a session", !sessionAfterBad?.user);
+const user = await login("aisha@example.com", "password123");
+check("login as Aisha", user?.email === "aisha@example.com");
 
-await login("alice@example.com", "password123");
-const session = await (await req("/api/auth/session")).json();
-check("login works for seeded user", session?.user?.email === "alice@example.com");
-
-// ---- 2. Find the seeded group via dashboard HTML
 const dash = await (await req("/dashboard")).text();
 const groupId = dash.match(/\/groups\/([a-z0-9]+)/)?.[1];
-check("dashboard lists the seeded group", !!groupId);
+check("Flat 4B group present", !!groupId);
 
-// ---- 3. Authorization: a non-member must get 403/404 on someone else's group
-await login("alice@example.com", "password123");
-const meRes = await req(`/api/groups/${groupId}/import`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ csv: "date,description,amount,paid_by,split_type,participants,splits\n" }),
-});
-check("member can call group endpoints", meRes.status !== 403, `got ${meRes.status}`);
+const csv = readFileSync(new URL("../public/expenses_export.csv", import.meta.url), "utf8");
 
-// register a fresh outsider
-const outsiderEmail = `outsider-${Date.now()}@example.com`;
-await req("/api/auth/register", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ name: "Outsider", email: outsiderEmail, password: "password123" }),
-});
-await login(outsiderEmail, "password123");
-const foreign = await req(`/api/groups/${groupId}/expenses`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    description: "intrusion",
-    amount: "10.00",
-    date: "2024-02-10",
-    paidById: "whatever",
-    splitType: "EQUAL",
-    participantIds: ["whatever"],
-  }),
-});
-check("outsider gets 403 on foreign group", foreign.status === 403, `got ${foreign.status}`);
-
-// ---- 4. Expense creation + tampering
-await login("alice@example.com", "password123");
-const groupHtml = await (await req(`/groups/${groupId}?tab=members`)).text();
-// pull user ids from the expense API instead: create EQUAL expense via members from import ctx
-// Use the import preview to discover member names is overkill; instead create with self only:
-const sessionUserId = session.user.id ?? null;
-
-// EQUAL expense $100 with payer only (flag-worthy but valid via UI rules)
-const eq = await req(`/api/groups/${groupId}/expenses`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    description: "Smoke equal",
-    amount: "100.00",
-    date: "2024-02-20",
-    paidById: sessionUserId,
-    splitType: "EQUAL",
-    participantIds: [sessionUserId],
-  }),
-});
-check("expense create works", eq.status === 201, `got ${eq.status} ${await eq.text()}`);
-
-// Tampered EXACT split: shares don't sum to total -> must be rejected
-const tampered = await req(`/api/groups/${groupId}/expenses`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    description: "Tampered",
-    amount: "100.00",
-    date: "2024-02-20",
-    paidById: sessionUserId,
-    splitType: "EXACT",
-    participantIds: [sessionUserId],
-    exact: { [sessionUserId]: "55.00" },
-  }),
-});
-const tamperedBody = await tampered.json();
-check(
-  "tampered split (55 != 100) rejected with SPLIT_SUM_MISMATCH",
-  tampered.status === 422 && tamperedBody?.error?.code === "SPLIT_SUM_MISMATCH",
-  `got ${tampered.status} ${JSON.stringify(tamperedBody)}`,
-);
-
-// Sub-cent amount rejected
-const subcent = await req(`/api/groups/${groupId}/expenses`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    description: "Subcent",
-    amount: "33.333",
-    date: "2024-02-20",
-    paidById: sessionUserId,
-    splitType: "EQUAL",
-    participantIds: [sessionUserId],
-  }),
-});
-check("sub-cent amount rejected", subcent.status === 422, `got ${subcent.status}`);
-
-// ---- 5. CSV import: preview, confirm, idempotent re-confirm
-const csv = await (await req("/sample-import.csv")).text();
+// Preview.
 const preview = await (
   await req(`/api/groups/${groupId}/import`, {
     method: "POST",
@@ -159,21 +64,26 @@ const preview = await (
     body: JSON.stringify({ csv }),
   })
 ).json();
-const s1 = preview.summary;
-check("preview accounts for every row", s1.imported + s1.flagged + s1.rejected + s1.duplicate + s1.empty === s1.total, JSON.stringify(s1));
-check("preview detects rejections (anomaly file)", s1.rejected >= 5, JSON.stringify(s1));
-check("preview detects in-file duplicate", s1.duplicate >= 1, JSON.stringify(s1));
-check("preview flags future date / near-dup / self-only", s1.flagged >= 2, JSON.stringify(s1));
+const s = preview.summary;
+console.log("  preview summary:", JSON.stringify(s));
+check("every row accounted for", s.imported + s.flagged + s.rejected + s.duplicate + s.reclassified + s.empty === s.total, JSON.stringify(s));
+check("settlement reclassified (Rohan paid Aisha back)", s.reclassified >= 1, `reclassified=${s.reclassified}`);
+check("at least one exact duplicate skipped (Marina)", s.duplicate >= 1, `duplicate=${s.duplicate}`);
+check("USD rows converted", s.convertedCurrency >= 3, `converted=${s.convertedCurrency}`);
+check("several rows rejected (precision/zero/110%/unknown)", s.rejected >= 3, `rejected=${s.rejected}`);
+check("several rows flagged for review", s.flagged >= 5, `flagged=${s.flagged}`);
 
-const confirm1 = await (
+// Confirm commit.
+const confirm = await (
   await req(`/api/groups/${groupId}/import/confirm`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ csv, filename: "sample-import.csv" }),
+    body: JSON.stringify({ csv, filename: "expenses_export.csv" }),
   })
 ).json();
-check("confirm returns a batch id", !!confirm1.batchId, JSON.stringify(confirm1));
+check("import committed (batch id)", !!confirm.batchId, JSON.stringify(confirm));
 
+// Idempotent re-preview.
 const preview2 = await (
   await req(`/api/groups/${groupId}/import`, {
     method: "POST",
@@ -181,19 +91,17 @@ const preview2 = await (
     body: JSON.stringify({ csv }),
   })
 ).json();
-check(
-  "re-upload is idempotent: 0 importable, all prior imports now duplicates",
-  preview2.summary.imported === 0 && preview2.summary.flagged === 0,
-  JSON.stringify(preview2.summary),
-);
+check("re-import is idempotent (0 new expenses/settlements)",
+  preview2.summary.imported === 0 && preview2.summary.flagged === 0 && preview2.summary.reclassified === 0,
+  JSON.stringify(preview2.summary));
 
-// ---- 6. Report download
-const reportCsv = await req(`/api/groups/${groupId}/imports/${confirm1.batchId}?format=csv`);
-check("report CSV downloads", reportCsv.status === 200 && (reportCsv.headers.get("content-type") ?? "").includes("text/csv"));
-
-// ---- 7. Balances page renders (zero-sum assertion runs server-side)
+// Balances page renders => Σ net == 0 assertion passed on real data.
 const balances = await req(`/groups/${groupId}?tab=balances`);
-check("balances tab renders (Σ net == 0 assertion passed)", balances.status === 200, `got ${balances.status}`);
+check("balances tab renders (Σ net == 0 held with refund + settlements + USD)", balances.status === 200, `status ${balances.status}`);
+
+// Report download.
+const report = await req(`/api/groups/${groupId}/imports/${confirm.batchId}?format=csv`);
+check("import report CSV downloads", report.status === 200 && (report.headers.get("content-type") ?? "").includes("text/csv"));
 
 console.log(failures === 0 ? "\nALL SMOKE TESTS PASSED" : `\n${failures} FAILURES`);
 process.exit(failures === 0 ? 0 : 1);

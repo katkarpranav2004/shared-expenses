@@ -26,16 +26,23 @@ export default async function ImportPage({ params }: { params: Promise<{ id: str
       <p className="mt-2 text-sm text-slate-600">
         Expected columns:{" "}
         <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
-          date, description, amount, paid_by, split_type, participants, splits
+          date, description, paid_by, amount, currency, split_type, split_with, split_details, notes
         </code>
-        . Participants are separated by <code className="rounded bg-slate-100 px-1">;</code> and
-        matched by name or email. For EXACT/PERCENTAGE splits use{" "}
-        <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">Name=value;Name=value</code>.{" "}
-        <a href="/sample-import.csv" download className="text-emerald-700 underline">
-          Download a sample file
+        . Dates are <code className="rounded bg-slate-100 px-1">DD-MM-YYYY</code>; members in{" "}
+        <code className="rounded bg-slate-100 px-1">split_with</code> are separated by{" "}
+        <code className="rounded bg-slate-100 px-1">;</code>. Split types:{" "}
+        <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">equal</code>,{" "}
+        <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">unequal/exact</code>,{" "}
+        <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">percentage</code>,{" "}
+        <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">share</code> — with per-person
+        values in <code className="rounded bg-slate-100 px-1">split_details</code> like{" "}
+        <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">Rohan 700; Priya 400</code>. USD
+        amounts are converted to the group base (INR). Nothing is saved until you confirm the
+        preview, and re-uploading the same file never double-imports.{" "}
+        <a href="/expenses_export.csv" download className="text-emerald-700 underline">
+          Download the assignment CSV
         </a>
-        . Nothing is saved until you confirm the preview, and re-uploading the same file never
-        double-imports.
+        .
       </p>
 
       <ImportWizard groupId={groupId} />

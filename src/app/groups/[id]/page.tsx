@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { getGroupBalances } from "@/lib/groupService";
-import { formatCents } from "@/lib/money";
+import { formatMoney as formatCents, formatMoney } from "@/lib/currency";
 import { AddMemberForm } from "@/components/AddMemberForm";
 import { LeaveGroupButton } from "@/components/LeaveGroupButton";
 import { DeleteExpenseButton } from "@/components/DeleteExpenseButton";
@@ -111,7 +111,12 @@ export default async function GroupPage({
             <div key={e.id} className="rounded-xl border border-slate-200 bg-white p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="font-semibold">{e.description}</p>
+                  <p className="font-semibold">
+                    {e.description}
+                    {e.isRefund && (
+                      <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700">refund</span>
+                    )}
+                  </p>
                   <p className="text-sm text-slate-500">
                     {e.date.toISOString().slice(0, 10)} · paid by {e.paidBy.name} ·{" "}
                     {e.splitType.toLowerCase()} split
@@ -123,6 +128,12 @@ export default async function GroupPage({
                 </div>
                 <div className="text-right">
                   <p className="font-bold">{formatCents(e.amountCents)}</p>
+                  {e.currency !== "INR" && (
+                    <p className="text-xs text-slate-400">
+                      {formatMoney(e.originalAmountCents, e.currency)} @ 1 {e.currency} ={" "}
+                      {formatMoney(e.fxRateBp)}
+                    </p>
+                  )}
                   {e.paidById === userId && <DeleteExpenseButton groupId={groupId} expenseId={e.id} />}
                 </div>
               </div>

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 type PreviewRow = {
   rowNumber: number;
-  outcome: "IMPORTED" | "FLAGGED" | "REJECTED" | "DUPLICATE" | "EMPTY";
+  outcome: "IMPORTED" | "FLAGGED" | "REJECTED" | "DUPLICATE" | "RECLASSIFIED" | "EMPTY";
   reasons: string[];
   messages: string[];
   raw: string;
@@ -16,8 +16,10 @@ type Summary = {
   flagged: number;
   rejected: number;
   duplicate: number;
+  reclassified: number;
   empty: number;
   normalizedWhitespace: number;
+  convertedCurrency: number;
 };
 
 const OUTCOME_STYLE: Record<PreviewRow["outcome"], string> = {
@@ -25,6 +27,7 @@ const OUTCOME_STYLE: Record<PreviewRow["outcome"], string> = {
   FLAGGED: "bg-amber-100 text-amber-800",
   REJECTED: "bg-red-100 text-red-700",
   DUPLICATE: "bg-slate-200 text-slate-600",
+  RECLASSIFIED: "bg-sky-100 text-sky-800",
   EMPTY: "bg-slate-100 text-slate-400",
 };
 
@@ -104,6 +107,7 @@ export function ImportWizard({ groupId }: { groupId: string }) {
                 ["ALL", preview.summary.total, "All rows"],
                 ["IMPORTED", preview.summary.imported, "Will import"],
                 ["FLAGGED", preview.summary.flagged, "Import + flag"],
+                ["RECLASSIFIED", preview.summary.reclassified, "→ Settlement"],
                 ["REJECTED", preview.summary.rejected, "Rejected"],
                 ["DUPLICATE", preview.summary.duplicate, "Duplicates"],
                 ["EMPTY", preview.summary.empty, "Empty"],
@@ -120,9 +124,12 @@ export function ImportWizard({ groupId }: { groupId: string }) {
               </button>
             ))}
           </div>
-          {preview.summary.normalizedWhitespace > 0 && (
+          {(preview.summary.normalizedWhitespace > 0 || preview.summary.convertedCurrency > 0) && (
             <p className="mt-2 text-xs text-slate-500">
-              {preview.summary.normalizedWhitespace} row(s) required whitespace normalization.
+              {preview.summary.normalizedWhitespace > 0 &&
+                `${preview.summary.normalizedWhitespace} row(s) required whitespace/case normalization. `}
+              {preview.summary.convertedCurrency > 0 &&
+                `${preview.summary.convertedCurrency} row(s) converted from another currency to the group base.`}
             </p>
           )}
 
@@ -165,7 +172,7 @@ export function ImportWizard({ groupId }: { groupId: string }) {
           >
             {busy
               ? "Importing…"
-              : `Confirm import (${preview.summary.imported + preview.summary.flagged} rows)`}
+              : `Confirm import (${preview.summary.imported + preview.summary.flagged} expenses, ${preview.summary.reclassified} settlement${preview.summary.reclassified === 1 ? "" : "s"})`}
           </button>
         </div>
       )}
