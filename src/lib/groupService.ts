@@ -10,6 +10,7 @@ export async function getGroupBalances(groupId: string) {
       select: {
         paidById: true,
         amountCents: true,
+        isRefund: true,
         splits: { select: { userId: true, shareCents: true } },
       },
     }),
