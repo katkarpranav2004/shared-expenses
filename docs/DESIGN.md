@@ -80,8 +80,16 @@
 
 ## 4. Database Schema (PostgreSQL via Prisma)
 
-All money columns are **integer cents** (`Int`, range is ample for expenses). All FKs
-indexed. `snake_case` table names via `@@map`.
+> **Authoritative schema:** [SCOPE.md §4](../SCOPE.md#4-database-schema-postgresql-via-prisma)
+> and `prisma/schema.prisma`. The block below is the original single-currency design;
+> after the real CSV arrived it gained multi-currency fields (`base_currency` on groups;
+> `original_amount_cents` + `currency` + `fx_rate_bp` on expenses and settlements), an
+> `is_refund` flag, a `notes` column, a `SHARE` split type, and a `RECLASSIFIED` import
+> outcome. See SCOPE.md §4 for the current shape and DECISIONS #16–#21 for why.
+
+All money columns are **integer minor units** (paise for INR / cents for USD; `Int`). All
+FKs indexed. `snake_case` table names via `@@map`. Every expense stores both its original
+amount+currency (for display/audit) and a base-currency amount (what balance math uses).
 
 ```prisma
 model User {

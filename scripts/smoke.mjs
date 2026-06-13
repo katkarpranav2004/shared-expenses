@@ -6,7 +6,11 @@
 
 import { readFileSync } from "node:fs";
 
-const BASE = "http://localhost:3000";
+// BASE and PREVIEW_ONLY are overridable so the same checks run against the live
+// deployment without committing data (node scripts/smoke.mjs, or
+// BASE=https://… PREVIEW_ONLY=1 node scripts/smoke.mjs).
+const BASE = process.env.BASE ?? "http://localhost:3000";
+const PREVIEW_ONLY = process.env.PREVIEW_ONLY === "1";
 const jar = new Map();
 
 function setCookies(res) {
@@ -72,6 +76,11 @@ check("at least one exact duplicate skipped (Marina)", s.duplicate >= 1, `duplic
 check("USD rows converted", s.convertedCurrency >= 3, `converted=${s.convertedCurrency}`);
 check("several rows rejected (precision/zero/110%/unknown)", s.rejected >= 3, `rejected=${s.rejected}`);
 check("several rows flagged for review", s.flagged >= 5, `flagged=${s.flagged}`);
+
+if (PREVIEW_ONLY) {
+  console.log(failures === 0 ? "\nPREVIEW CHECKS PASSED (no data committed)" : `\n${failures} FAILURES`);
+  process.exit(failures === 0 ? 0 : 1);
+}
 
 // Confirm commit.
 const confirm = await (
